@@ -2,17 +2,17 @@ hosts = [
   {
     :name => "hadoop001",
     :box => "generic/centos7",
-    :ip => "192.168.31.101"
+    :ip => "192.168.1.101"
   },
   {
     :name => "hadoop002",
     :box => "generic/centos7",
-    :ip => "192.168.31.102"
+    :ip => "192.168.1.102"
   },
   {
     :name => "hadoop003",
     :box => "generic/centos7",
-    :ip => "192.168.31.103"
+    :ip => "192.168.1.103"
   }
   ]
 
