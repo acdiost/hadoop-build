@@ -1,29 +1,24 @@
-# HDFS 高可用 QJM (仲裁日志管理)
+# 在 aarch64 服务器上部署 HDFS-HA-QJM
 
 [参考文档](https://hadoop.apache.org/docs/r3.3.4/hadoop-project-dist/hadoop-hdfs/HDFSHighAvailabilityWithQJM.html)
 
-启动服务器
-
-`cd vagrant`
-
-`vagrant up`
+阿里云购买的 arm 架构服务器
 
 ## 环境
 
-操作系统：2C4G , CentOS 7.9 (Linux hostname 3.10.0-1160.25.1.el7.x86_64)
+操作系统：2C 4G , CentOS 7.9 (Linux hostname 4.18.0-193.28.1.el7.aarch64)
 
 Java™：java-1.8.0-openjdk （ yum install -y java-1.8.0-openjdk-devel ）
 
 远程连接：openssh （ yum install -y openssh ）
 
-[hadoop-3.3.4.tar.gz](https://mirrors.tuna.tsinghua.edu.cn/apache/hadoop/common/hadoop-3.3.4/hadoop-3.3.4.tar.gz)
+[hadoop-3.3.1.tar.gz](https://mirrors.tuna.tsinghua.edu.cn/apache/hadoop/common/hadoop-3.3.1/hadoop-3.3.1-aarch64.tar.gz)
 
-[zookeeper-3.7.1](https://mirrors.tuna.tsinghua.edu.cn/apache/zookeeper/zookeeper-3.7.1/apache-zookeeper-3.7.1-bin.tar.gz)
-
+[zookeeper-3.4.5](https://obs-mirror-ftp4.obs.cn-north-4.myhuaweicloud.com/middleware/zookeeper-3.4.5.aarch64.tar.gz)
 
 ## 服务器规划
 
-| 192.168.1.101   | 192.168.1.102   | 192.168.1.103 |
+| 172.16.16.100   | 172.16.16.101   | 172.16.16.102 |
 | --------------- | --------------- | ------------- |
 | NameNode        | NameNode        |               |
 | JournalNode     | JournalNode     | JournalNode   |
@@ -59,10 +54,9 @@ makestep 1.0 3
 rtcsync
 keyfile /etc/chrony.keys
 # 允许同步的 ip
-allow 192.168.0.0/16
+allow 172.16.0.0/16
 local stratum 10
 logdir /var/log/chrony
-
 
 stratumweight 0
 #bindcmdaddress 127.0.0.1
@@ -76,7 +70,7 @@ logchange 0.5
 ### 时间客户端配置
 
 ```conf
-server 192.168.1.101 iburst
+server 172.16.16.100 iburst
 driftfile /var/lib/chrony/drift
 makestep 1.0 3
 rtcsync
@@ -87,7 +81,7 @@ logdir /var/log/chrony
 ## 防火墙配置
 
 ```bash
-firewall-cmd --add-source=192.168.1.0/24 --permanent --zone=trusted
+firewall-cmd --add-source=172.16.16.0/24 --permanent --zone=trusted
 firewall-cmd --reload
 ```
 
@@ -99,18 +93,21 @@ firewall-cmd --reload
 127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4
 ::1         localhost localhost.localdomain localhost6 localhost6.localdomain6
 
-192.168.1.101 hadoop001 hadoop001.domain.com
-192.168.1.102 hadoop002 hadoop002.domain.com
-192.168.1.103 hadoop003 hadoop003.domain.com
+172.16.16.100 hadoop001 hadoop001.domain.com
+172.16.16.101 hadoop002 hadoop002.domain.com
+172.16.16.102 hadoop003 hadoop003.domain.com
 ```
 
-## 服务间免密登录
+## 服务器间免密登录
 
 ```bash
 # 各服务器添加普通用户
 useradd hadoop
 echo password | passwd hadoop --stdin
-usermod -aG wheel hadoop
+
+# 提前创建好 zookeeper 目录
+mkdir /var/lib/zookeeper
+chown hadoop.hadoop /var/lib/zookeeper
 
 su - hadoop
 
@@ -118,20 +115,20 @@ ssh-keygen -t rsa -P '' -f ~/.ssh/id_rsa
 cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
 chmod 0600 ~/.ssh/authorized_keys
 
-# 在 192.168.1.102 也执行
-ssh-copy-id 192.168.1.101
-ssh-copy-id 192.168.1.102
-ssh-copy-id 192.168.1.103
+# 在 172.16.16.101 也执行
+ssh-copy-id 172.16.16.100
+ssh-copy-id 172.16.16.101
+ssh-copy-id 172.16.16.102
 ```
 
 ## 安装 zookeeper
 
 ```bash
-wget --no-check-certificate https://mirrors.tuna.tsinghua.edu.cn/apache/zookeeper/zookeeper-3.7.1/apache-zookeeper-3.7.1-bin.tar.gz
+wget https://obs-mirror-ftp4.obs.cn-north-4.myhuaweicloud.com/middleware/zookeeper-3.4.5.aarch64.tar.gz
 
-tar xaf apache-zookeeper-3.7.1-bin.tar.gz
+tar xaf zookeeper-3.4.5.aarch64.tar.gz
 
-cat <<EOF | tee apache-zookeeper-3.7.1-bin/conf/zoo.cfg
+cat <<EOF | tee zookeeper-3.4.5/conf/zoo.cfg
 tickTime=2000
 dataDir=/var/lib/zookeeper/
 clientPort=2181
@@ -142,33 +139,30 @@ server.2=hadoop002:2888:3888
 server.3=hadoop003:2888:3888
 EOF
 
-scp -r apache-zookeeper-3.7.1-bin hadoop002:$PWD
-scp -r apache-zookeeper-3.7.1-bin hadoop003:$PWD
+scp -r zookeeper-3.4.5 hadoop002:$PWD
+scp -r zookeeper-3.4.5 hadoop003:$PWD
 
-# 各服务器执行
-sudo mkdir /var/lib/zookeeper
-sudo chown hadoop.hadoop /var/lib/zookeeper
 
 # id 根据配置文件修改
 echo 1 > /var/lib/zookeeper/myid
-touch /var/lib/zookeeper/initialize
 
-~/apache-zookeeper-3.7.1-bin/bin/zkServer.sh start
-~/apache-zookeeper-3.7.1-bin/bin/zkServer.sh status
+~/zookeeper-3.4.5/bin/zkServer.sh start
+~/zookeeper-3.4.5/bin/zkServer.sh status
 ```
 
 ## 配置 Hadoop
 
 ```bash
 # 解压下载好的安装包
-tar xaf /vagrant/hadoop-3.3.4.tar.gz -C /home/hadoop
-cd /home/hadoop/hadoop-3.3.4
+wget https://mirrors.tuna.tsinghua.edu.cn/apache/hadoop/common/hadoop-3.3.1/hadoop-3.3.1-aarch64.tar.gz --no-check-certificate
+
+tar xaf hadoop-3.3.1-aarch64.tar.gz -C /home/hadoop
 ```
 
 #### /home/hadoop/.bashrc
 
 ```bash
-export HADOOP_HOME=/home/hadoop/hadoop-3.3.4
+export HADOOP_HOME=/home/hadoop/hadoop-3.3.1
 export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin
 ```
 
@@ -205,14 +199,6 @@ export HADOOP_OS_TYPE=${HADOOP_OS_TYPE:-$(uname -s)}
         <name>ha.zookeeper.quorum</name> 
         <value>hadoop001:2181,hadoop002:2181,hadoop003:2181</value> 
     </property>
-    <!-- <property> 
-        <name>ha.zookeeper.auth</name> 
-        <value>@/path/to/zk-auth.txt</value> 
-    </property> 
-    <property> 
-        <name>ha.zookeeper.acl</ name> 
-        <value>@/path/to/zk-acl.txt</value> 
-    </property> -->
 </configuration>
 ```
 
@@ -262,10 +248,6 @@ export HADOOP_OS_TYPE=${HADOOP_OS_TYPE:-$(uname -s)}
         <name>dfs.ha.fencing.ssh.private-key-files</name>
         <value>/home/hadoop/.ssh/id_rsa</value>
     </property>
-    <!-- <property>
-        <name>dfs.ha.fencing.methods</name>
-        <value>sshfence([[username][:port]])</value>
-    </property> -->
     <property>
         <name>dfs.ha.fencing.ssh.connect-timeout</name>
         <value>30000</value>
@@ -305,7 +287,9 @@ export HADOOP_OS_TYPE=${HADOOP_OS_TYPE:-$(uname -s)}
 #### etc/hadoop/yarn-site.xml
 
 参考文档
+
 > https://hadoop.apache.org/docs/r3.3.4/hadoop-yarn/hadoop-yarn-site/ResourceManagerHA.html
+
 ```xml
 <?xml version="1.0"?>
 <configuration>
@@ -317,7 +301,6 @@ export HADOOP_OS_TYPE=${HADOOP_OS_TYPE:-$(uname -s)}
         <name>yarn.resourcemanager.ha.enabled</name>
         <value>true</value>
     </property>
-
     <property>
         <name>yarn.resourcemanager.cluster-id</name>
         <value>cluster1</value>
@@ -334,7 +317,6 @@ export HADOOP_OS_TYPE=${HADOOP_OS_TYPE:-$(uname -s)}
         <name>yarn.resourcemanager.hostname.rm2</name>
         <value>hadoop002</value>
     </property>
-
     <property>
         <name>yarn.resourcemanager.webapp.address.rm1</name>
         <value>hadoop001:8088</value>
@@ -361,15 +343,18 @@ hadoop003
 ## 分发程序包
 
 ```bash
-scp -r hadoop-3.3.4/ hadoop002:$PWD
-scp -r hadoop-3.3.4/ hadoop003:$PWD
+cd ~
+scp -r hadoop-3.3.1/ hadoop002:$PWD
+scp -r hadoop-3.3.1/ hadoop003:$PWD
 ```
 
 ## 启动 journalnode
 
 分别在三台主机执行
+
 ```bash
-bin/hdfs --daemon start journalnode
+source ~/.bashrc
+hdfs --daemon start journalnode
 ```
 
 ## 格式化文件系统
@@ -377,9 +362,8 @@ bin/hdfs --daemon start journalnode
 在 hadoop001 上执行并启动 namenode
 
 ```bash
-bin/hdfs namenode -format
-
-bin/hdfs --daemon start namenode
+hdfs namenode -format
+hdfs --daemon start namenode
 ```
 
 成功提示信息
@@ -389,6 +373,7 @@ bin/hdfs --daemon start namenode
 ## 数据同步
 
 在 hadoop002 执行数据同步命令
+
 ```bash
 hdfs namenode -bootstrapStandby
 ```
@@ -396,7 +381,7 @@ hdfs namenode -bootstrapStandby
 ## 初始化 zookeeper
 
 ```bash
-$HADOOP_HOME/bin/hdfs zkfc -formatZK
+hdfs zkfc -formatZK
 ```
 
 成功提示信息
@@ -406,30 +391,25 @@ $HADOOP_HOME/bin/hdfs zkfc -formatZK
 ## 启动 hdfs
 
 ```bash
-source .bashrc
+start-all.sh
 
-sbin/start-all.sh
-
-# 临时开启防火墙的端口访问
+# 开启防火墙的端口访问
 firewall-cmd --add-port=9870/tcp --permanent
 firewall-cmd --reload
 ```
 
 ## 访问测试
 
-192.168.1.101:9870
+ip:9870
 
 功能性测试
 
 ```bash
-bin/hdfs dfs -mkdir -p /user/hadoop
-
-bin/hdfs dfs -mkdir input
-bin/hdfs dfs -put etc/hadoop/*.xml input
-
-bin/hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-3.3.4.jar grep input output 'dfs[a-z.]+'
-
-bin/hdfs dfs -cat output/*
+hdfs dfs -mkdir -p /user/hadoop
+hdfs dfs -mkdir input
+hdfs dfs -put etc/hadoop/*.xml input
+hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-3.3.1.jar grep input output 'dfs[a-z.]+'
+hdfs dfs -cat output/*
 ```
 
 输出结果：
