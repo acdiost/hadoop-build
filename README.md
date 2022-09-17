@@ -8,7 +8,7 @@ HDFS-HA-QJM 的部署安装请参考 hdfs-ha-qjm 分支
 
 ## 服务器规划
 
-| 172.16.16.100   | 172.16.16.101   | 172.16.16.102 |
+| 192.168.1.101   | 192.168.1.102   | 192.168.1.103 |
 | --------------- | --------------- | ------------- |
 | NameNode        | NameNode        |               |
 | JournalNode     | JournalNode     | JournalNode   |
@@ -18,6 +18,7 @@ HDFS-HA-QJM 的部署安装请参考 hdfs-ha-qjm 分支
 | ResourceManager | ResourceManager |               |
 | NodeManager     | NodeManager     | NodeManager   |
 |                 |                 | HiveServer2   |
+|                 |                 | MySQL         |
 
 ## 获取 Hive 安装包
 
@@ -76,6 +77,12 @@ hadoop fs -chmod g+w /tmp
 hadoop fs -mkdir -p /user/hive/warehouse
 hadoop fs -chmod g+w /user/hive/warehouse
 ```
+
+
+
+---
+
+
 
 ## 内嵌模式
 
@@ -152,7 +159,7 @@ schematool -initSchema -dbType derby
 > Initialization script completed
 > schemaTool completed
 
-生成的数据文件在 `$HIVE_HOME/metastore_db` 
+生成的数据文件在 `$HIVE_HOME/metastore_db`
 
 ### 连接 hive 数据库
 
@@ -189,4 +196,159 @@ insert into test values('1');
 select * from test;
 ```
 
+
+
 ---
+
+## MySQL
+
+数据库版本： 5.7
+
+### 安装数据库
+
+```bash
+yum localinstall https://dev.mysql.com/get/mysql57-community-release-el7-11.noarch.rpm
+
+rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2022
+
+yum install mysql-community-server 
+
+systemctl enable mysqld --now
+
+grep 'A temporary password' /var/log/mysqld.log | tail -1
+
+/usr/bin/mysql_secure_installation
+
+mysql -u root -p
+```
+
+### 创建 hive 账号和库
+
+```sql
+create user 'hive'@'192.168.1.%' IDENTIFIED BY 'Hive_1234';
+create database hive;
+
+GRANT ALL ON hive.* TO 'hive'@'192.168.1.%';
+
+FLUSH PRIVILEGES;
+
+-- mysql -u hive -p -h 192.168.1.103
+```
+
+### 配置数据库驱动
+
+```bash
+yum install mysql-connector-java
+cp /usr/share/java/mysql-connector-java.jar $HIVE_HOME/lib/mysql-connector-java.jar
+chown hadoop.hadoop $HIVE_HOME/lib/mysql-connector-java.jar
+```
+
+### $HIVE_HOME/conf/hive-site.xml
+
+```xml
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+  <property>
+    <name>hive.metastore.db.type</name>
+    <value>mysql</value>
+    <description>
+      Expects one of [derby, oracle, mysql, mssql, postgres].
+      Type of database used by the metastore. Information schema & JDBCStorageHandler depend on it.
+    </description>
+  </property>
+  <property>
+    <name>hive.metastore.warehouse.dir</name>
+    <value>/user/hive/warehouse</value>
+    <description>location of default database for the warehouse</description>
+  </property>
+  <property>
+    <name>hive.metastore.uris</name>
+    <value>thrift://127.0.0.1:9083</value>
+    <description>Thrift URI for the remote metastore. Used by metastore client to connect to remote metastore.</description>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionURL</name>
+    <value>jdbc:mysql://192.168.1.103/hive?serverTimezone=Asia/Shanghai</value>
+    <description>
+      JDBC connect string for a JDBC metastore.
+      To use SSL to encrypt/authenticate the connection, provide database-specific SSL flag in the connection URL.
+      For example, jdbc:postgresql://myhost/db?ssl=true for postgres database.
+    </description>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionUserName</name>
+    <value>hive</value>
+    <description>Username to use against metastore database</description>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionPassword</name>
+    <value>Hive_1234</value>
+    <description>password to use against metastore database</description>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionDriverName</name>
+    <value>com.mysql.cj.jdbc.Driver</value>
+    <description>Driver class name for a JDBC metastore</description>
+  </property>
+  <property>
+    <name>hive.metastore.event.db.notification.api.auth</name>
+    <value>false</value>
+    <description>
+      Should metastore do authorization against database notification related APIs such as get_next_notification.
+      If set to true, then only the superusers in proxy settings have the permission
+    </description>
+  </property>
+  <property>
+    <name>hive.metastore.schema.verification</name>
+    <value>false</value>
+    <description>
+      Enforce metastore schema version consistency.
+      True: Verify that version information stored in is compatible with one from Hive jars.  Also disable automatic
+            schema migration attempt. Users are required to manually migrate schema after Hive upgrade which ensures
+            proper metastore schema migration. (Default)
+      False: Warn if the version information stored in metastore doesn't match with one from in Hive jars.
+    </description>
+  </property>
+  <property>
+    <name>hive.server2.enable.doAs</name>
+    <value>false</value>
+  </property>
+</configuration>
+```
+
+### 初始化 MySQL 数据库
+
+```bash
+schematool -dbType mysql -initSchema
+```
+
+执行成功提示信息
+
+> Initialization script completed
+> schemaTool completed
+
+### 启动 hive 服务
+
+```bash
+hive --service metastore &
+hive --service hiveserver2 &
+```
+
+页面访问
+
+http://192.168.1.103:10002/
+
+测试连接
+
+`beeline -n hadoop -u jdbc:hive2://localhost:10000`
+
+### 测试 SQL 语句
+
+```sql
+create table test(id string);
+
+insert into test values('1');
+
+select * from test;
+```
