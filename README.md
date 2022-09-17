@@ -1,20 +1,10 @@
-# 在 aarch64 服务器上部署 HDFS-HA-QJM
+# 基于 HDFS-HA-QJM 部署 hive
 
-[参考文档](https://hadoop.apache.org/docs/r3.3.4/hadoop-project-dist/hadoop-hdfs/HDFSHighAvailabilityWithQJM.html)
-
-阿里云购买的 arm 架构服务器
+HDFS-HA-QJM 的部署安装请参考 hdfs-ha-qjm 分支
 
 ## 环境
 
-操作系统：2C 4G , CentOS 7.9 (Linux hostname 4.18.0-193.28.1.el7.aarch64)
-
-Java™：java-1.8.0-openjdk （ yum install -y java-1.8.0-openjdk-devel ）
-
-远程连接：openssh （ yum install -y openssh ）
-
-[hadoop-3.3.1.tar.gz](https://mirrors.tuna.tsinghua.edu.cn/apache/hadoop/common/hadoop-3.3.1/hadoop-3.3.1-aarch64.tar.gz)
-
-[zookeeper-3.4.5](https://obs-mirror-ftp4.obs.cn-north-4.myhuaweicloud.com/middleware/zookeeper-3.4.5.aarch64.tar.gz)
+[apache-hive-3.1.3-bin.tar.gz](https://dlcdn.apache.org/hive/hive-3.1.3/apache-hive-3.1.3-bin.tar.gz)
 
 ## 服务器规划
 
@@ -27,404 +17,176 @@ Java™：java-1.8.0-openjdk （ yum install -y java-1.8.0-openjdk-devel ）
 | ZKFC            | ZKFC            |               |
 | ResourceManager | ResourceManager |               |
 | NodeManager     | NodeManager     | NodeManager   |
+|                 |                 | HiveServer2   |
 
-## 时间同步
-
-```bash
-yum install chrony -y
-firewall-cmd --add-service=ntp --permanent --zone=public
-firewall-cmd --reload
-
-systemctl enable chronyd --now
-
-timedatectl set-timezone Asia/Shanghai
-
-```
-
-### 时间服务端配置
-
-`/etc/chrony.conf`
-
-```conf
-server ntp1.aliyun.com iburst
-server ntp2.aliyun.com iburst
-server ntp3.aliyun.com iburst
-driftfile /var/lib/chrony/drift
-makestep 1.0 3
-rtcsync
-keyfile /etc/chrony.keys
-# 允许同步的 ip
-allow 172.16.0.0/16
-local stratum 10
-logdir /var/log/chrony
-
-stratumweight 0
-#bindcmdaddress 127.0.0.1
-#bindcmdaddress ::1
-commandkey 1
-generatecommandkey
-noclientlog
-logchange 0.5
-```
-
-### 时间客户端配置
-
-```conf
-server 172.16.16.100 iburst
-driftfile /var/lib/chrony/drift
-makestep 1.0 3
-rtcsync
-keyfile /etc/chrony.keys
-logdir /var/log/chrony
-```
-
-## 防火墙配置
+## 获取 Hive 安装包
 
 ```bash
-firewall-cmd --add-source=172.16.16.0/24 --permanent --zone=trusted
-firewall-cmd --reload
-```
-
-## 配置 hosts
-
-`/etc/hosts`
-
-```
-127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4
-::1         localhost localhost.localdomain localhost6 localhost6.localdomain6
-
-172.16.16.100 hadoop001 hadoop001.domain.com
-172.16.16.101 hadoop002 hadoop002.domain.com
-172.16.16.102 hadoop003 hadoop003.domain.com
-```
-
-## 服务器间免密登录
-
-```bash
-# 各服务器添加普通用户
-useradd hadoop
-echo password | passwd hadoop --stdin
-
-# 提前创建好 zookeeper 目录
-mkdir /var/lib/zookeeper
-chown hadoop.hadoop /var/lib/zookeeper
-
 su - hadoop
 
-ssh-keygen -t rsa -P '' -f ~/.ssh/id_rsa
-cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
-chmod 0600 ~/.ssh/authorized_keys
+wget https://mirrors.tuna.tsinghua.edu.cn/apache/hive/hive-3.1.3/apache-hive-3.1.3-bin.tar.gz
 
-# 在 172.16.16.101 也执行
-ssh-copy-id 172.16.16.100
-ssh-copy-id 172.16.16.101
-ssh-copy-id 172.16.16.102
+tar xaf apache-hive-3.1.3-bin.tar.gz
+
+cd apache-hive-3.1.3-bin
 ```
 
-## 安装 zookeeper
-
-```bash
-wget https://obs-mirror-ftp4.obs.cn-north-4.myhuaweicloud.com/middleware/zookeeper-3.4.5.aarch64.tar.gz
-
-tar xaf zookeeper-3.4.5.aarch64.tar.gz
-
-cat <<EOF | tee zookeeper-3.4.5/conf/zoo.cfg
-tickTime=2000
-dataDir=/var/lib/zookeeper/
-clientPort=2181
-initLimit=5
-syncLimit=2
-server.1=hadoop001:2888:3888
-server.2=hadoop002:2888:3888
-server.3=hadoop003:2888:3888
-EOF
-
-scp -r zookeeper-3.4.5 hadoop002:$PWD
-scp -r zookeeper-3.4.5 hadoop003:$PWD
-
-
-# id 根据配置文件修改
-echo 1 > /var/lib/zookeeper/myid
-
-~/zookeeper-3.4.5/bin/zkServer.sh start
-~/zookeeper-3.4.5/bin/zkServer.sh status
-```
-
-## 配置 Hadoop
-
-```bash
-# 解压下载好的安装包
-wget https://mirrors.tuna.tsinghua.edu.cn/apache/hadoop/common/hadoop-3.3.1/hadoop-3.3.1-aarch64.tar.gz --no-check-certificate
-
-tar xaf hadoop-3.3.1-aarch64.tar.gz -C /home/hadoop
-```
+## 配置环境变量
 
 #### /home/hadoop/.bashrc
 
 ```bash
-export HADOOP_HOME=/home/hadoop/hadoop-3.3.1
-export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin
+export HIVE_HOME="/home/hadoop/apache-hive-3.1.3-bin"
+export PATH=$PATH:$HIVE_HOME/bin
 ```
 
-#### etc/hadoop/hadoop-env.sh
+`source ~/.bashrc`
 
-```bash
-export JAVA_HOME=/usr/lib/jvm/java-1.8.0
-export HADOOP_OS_TYPE=${HADOOP_OS_TYPE:-$(uname -s)}
-```
+#### $HADOOP_HOME/etc/hadoop/core-site.xml
 
-#### etc/hadoop/core-site.xml
+新增如下配置，参考文档
+
+> https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-common/Superusers.html
 
 ```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
-<configuration>
     <property>
-        <name>fs.defaultFS</name>
-        <value>hdfs://mycluster</value>
+        <name>hadoop.proxyuser.hadoop.hosts</name>
+        <value>192.168.1.0/24</value>
     </property>
     <property>
-        <name>hadoop.tmp.dir</name>
-        <value>/home/hadoop/data</value>
+        <name>hadoop.proxyuser.hadoop.groups</name>
+        <value>*</value>
     </property>
-    <property>
-        <name>dfs.journalnode.edits.dir</name>
-        <value>/home/hadoop/data/journal/data</value>
-    </property>
-    <property>
-       <name>dfs.ha.nn.not-become-active-in-safemode</name>
-       <value>true</value>
-    </property>
-    <property> 
-        <name>ha.zookeeper.quorum</name> 
-        <value>hadoop001:2181,hadoop002:2181,hadoop003:2181</value> 
-    </property>
-</configuration>
 ```
-
-#### etc/hadoop/hdfs-site.xml
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
-<configuration>
-    <property>
-        <name>dfs.nameservices</name>
-        <value>mycluster</value>
-    </property>
-    <property>
-        <name>dfs.ha.namenodes.mycluster</name>
-        <value>nn1, nn2</value>
-    </property>
-    <property>
-        <name>dfs.namenode.rpc-address.mycluster.nn1</name>
-        <value>hadoop001:8020</value>
-    </property>
-    <property>
-        <name>dfs.namenode.rpc-address.mycluster.nn2</name>
-        <value>hadoop002:8020</value>
-    </property>
-    <property>
-        <name>dfs.namenode.http-address.mycluster.nn1</name>
-        <value>hadoop001:9870</value>
-    </property>
-    <property>
-        <name>dfs.namenode.http-address.mycluster.nn2</name>
-        <value>hadoop002:9870</value>
-    </property>
-    <property>
-        <name>dfs.namenode.shared.edits.dir</name>
-        <value>qjournal://hadoop001:8485;hadoop002:8485/mycluster</value>
-    </property>
-    <property>
-       <name>dfs.client.failover.proxy.provider.mycluster</name>
-       <value>org.apache.hadoop.hdfs.server.namenode.ha.ConfiguredFailoverProxyProvider</value>
-    </property>
-    <property>
-        <name>dfs.ha.fencing.methods</name>
-        <value>sshfence</value>
-    </property>
-    <property>
-        <name>dfs.ha.fencing.ssh.private-key-files</name>
-        <value>/home/hadoop/.ssh/id_rsa</value>
-    </property>
-    <property>
-        <name>dfs.ha.fencing.ssh.connect-timeout</name>
-        <value>30000</value>
-    </property>
-    <property> 
-        <name>dfs.ha.automatic-failover.enabled</name> 
-        <value>true</value> 
-    </property>
-</configuration>
-```
-
-#### etc/hadoop/mapred-site.xml
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
-<configuration>
-    <property>
-        <name>mapreduce.framework.name</name>
-        <value>yarn</value>
-    </property>
-    <property>
-        <name>yarn.app.mapreduce.am.env</name>
-        <value>HADOOP_MAPRED_HOME=${HADOOP_HOME}</value>
-    </property>
-    <property>
-        <name>mapreduce.map.env</name>
-        <value>HADOOP_MAPRED_HOME=${HADOOP_HOME}</value>
-    </property>
-    <property>
-        <name>mapreduce.reduce.env</name>
-        <value>HADOOP_MAPRED_HOME=${HADOOP_HOME}</value>
-    </property>
-</configuration>
-```
-
-#### etc/hadoop/yarn-site.xml
-
-参考文档
-
-> https://hadoop.apache.org/docs/r3.3.4/hadoop-yarn/hadoop-yarn-site/ResourceManagerHA.html
-
-```xml
-<?xml version="1.0"?>
-<configuration>
-    <property>
-        <name>yarn.nodemanager.aux-services</name>
-        <value>mapreduce_shuffle</value>
-    </property>
-    <property>
-        <name>yarn.resourcemanager.ha.enabled</name>
-        <value>true</value>
-    </property>
-    <property>
-        <name>yarn.resourcemanager.cluster-id</name>
-        <value>cluster1</value>
-    </property>
-    <property>
-        <name>yarn.resourcemanager.ha.rm-ids</name>
-        <value>rm1,rm2</value>
-    </property>
-    <property>
-        <name>yarn.resourcemanager.hostname.rm1</name>
-        <value>hadoop001</value>
-    </property>
-    <property>
-        <name>yarn.resourcemanager.hostname.rm2</name>
-        <value>hadoop002</value>
-    </property>
-    <property>
-        <name>yarn.resourcemanager.webapp.address.rm1</name>
-        <value>hadoop001:8088</value>
-    </property>
-    <property>
-        <name>yarn.resourcemanager.webapp.address.rm2</name>
-        <value>hadoop002:8088</value>
-    </property>
-    <property>
-        <name>hadoop.zk.address</name>
-        <value>hadoop001:2181,hadoop002:2181,hadoop003:2181</value>
-    </property>
-</configuration>
-```
-
-#### etc/hadoop/workers
-
-```
-hadoop001
-hadoop002
-hadoop003
-```
-
-## 分发程序包
-
-```bash
-cd ~
-scp -r hadoop-3.3.1/ hadoop002:$PWD
-scp -r hadoop-3.3.1/ hadoop003:$PWD
-```
-
-## 启动 journalnode
-
-分别在三台主机执行
-
-```bash
-source ~/.bashrc
-hdfs --daemon start journalnode
-```
-
-## 格式化文件系统
-
-在 hadoop001 上执行并启动 namenode
-
-```bash
-hdfs namenode -format
-hdfs --daemon start namenode
-```
-
-成功提示信息
-
-> Storage directory /home/hadoop/data/dfs/name has been successfully formatted.
-
-## 数据同步
-
-在 hadoop002 执行数据同步命令
-
-```bash
-hdfs namenode -bootstrapStandby
-```
-
-## 初始化 zookeeper
-
-```bash
-hdfs zkfc -formatZK
-```
-
-成功提示信息
-
-> Successfully created /hadoop-ha/mycluster in ZK.
 
 ## 启动 hdfs
 
 ```bash
+# 分别在三台主机执行
+~/apache-zookeeper-3.7.1-bin/bin/zkServer.sh start
+# 在 namenode 节点执行；执行后检查一下，发现有未启动的情况。
 start-all.sh
-
-# 开启防火墙的端口访问
-firewall-cmd --add-port=9870/tcp --permanent
-firewall-cmd --reload
 ```
 
-## 访问测试
-
-ip:9870
-
-功能性测试
+## 创建 hive 所需目录
 
 ```bash
-hdfs dfs -mkdir -p /user/hadoop
-hdfs dfs -mkdir input
-hdfs dfs -put etc/hadoop/*.xml input
-hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-3.3.1.jar grep input output 'dfs[a-z.]+'
-hdfs dfs -cat output/*
+hadoop fs -mkdir /tmp
+hadoop fs -chmod g+w /tmp
+hadoop fs -mkdir -p /user/hive/warehouse
+hadoop fs -chmod g+w /user/hive/warehouse
 ```
 
-输出结果：
+## 内嵌模式
 
-> 2       dfs.namenode.http
-> 2       dfs.namenode.rpc
-> 2       dfs.ha.fencing.methods
-> 1       dfsadmin
-> 1       dfs.server.namenode.ha.
-> 1       dfs.nameservices
-> 1       dfs.namenode.shared.edits.dir
-> 1       dfs.journalnode.edits.dir
-> 1       dfs.ha.nn.not
-> 1       dfs.ha.namenodes.mycluster
-> 1       dfs.ha.fencing.ssh.private
-> 1       dfs.ha.fencing.ssh.connect
-> 1       dfs.ha.automatic
-> 1       dfs.client.failover.proxy.provider.mycluster
+> https://cwiki.apache.org/confluence/display/Hive/AdminManual+Metastore+3.0+Administration
+
+在此配置中，只有一个客户端可以使用 Metastore，并且任何更改在客户端生命周期后都不会持久
+
+#### $HIVE_HOME/conf/hive-site.xml
+
+新建此文件
+
+```xml
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+  <property>
+    <name>hive.metastore.db.type</name>
+    <value>DERBY</value>
+    <description>
+      Expects one of [derby, oracle, mysql, mssql, postgres].
+      Type of database used by the metastore. Information schema & JDBCStorageHandler depend on it.
+    </description>
+  </property>
+  <property>
+    <name>hive.metastore.warehouse.dir</name>
+    <value>/user/hive/warehouse</value>
+    <description>location of default database for the warehouse</description>
+  </property>
+  <property>
+    <name>hive.metastore.uris</name>
+    <value/>
+    <description>Thrift URI for the remote metastore. Used by metastore client to connect to remote metastore.</description>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionURL</name>
+    <value>jdbc:derby:;databaseName=metastore_db;create=true</value>
+    <description>
+      JDBC connect string for a JDBC metastore.
+      To use SSL to encrypt/authenticate the connection, provide database-specific SSL flag in the connection URL. 
+      For example, jdbc:postgresql://myhost/db?ssl=true for postgres database.
+    </description>
+  </property>
+  <property>
+    <name>javax.jdo.option.ConnectionDriverName</name>
+    <value>org.apache.derby.jdbc.EmbeddedDriver</value>
+    <description>Driver class name for a JDBC metastore</description>
+  </property>
+  <property>
+    <name>hive.metastore.schema.verification</name>
+    <value>false</value>
+    <description>
+      Enforce metastore schema version consistency.
+      True: Verify that version information stored in is compatible with one from Hive jars.  Also disable automatic
+            schema migration attempt. Users are required to manually migrate schema after Hive upgrade which ensures
+            proper metastore schema migration. (Default)
+      False: Warn if the version information stored in metastore doesn't match with one from in Hive jars.
+    </description>
+  </property>
+  <property>
+    <name>hive.server2.enable.doAs</name>
+    <value>false</value>
+  </property>
+</configuration>
+```
+
+### 初始化 Derby 数据库
+
+```bash
+schematool -initSchema -dbType derby
+```
+
+执行成功提示信息
+
+> Initialization script completed
+> schemaTool completed
+
+生成的数据文件在 `$HIVE_HOME/metastore_db` 
+
+### 连接 hive 数据库
+
+#### 通过 hive 命令
+
+```bash
+hive
+```
+
+#### 通过 hiveserver 服务
+
+启动 hiveserver2
+
+```bash
+hiveserver2
+```
+
+测试连接
+
+```bash
+beeline -n hadoop -u jdbc:hive2://localhost:10000
+
+# 退出 beeline
+jdbc:hive2://localhost:10000> !q
+```
+
+### 测试 SQL 语句
+
+```sql
+create table test(id string);
+
+insert into test values('1');
+
+select * from test;
+```
+
+---
