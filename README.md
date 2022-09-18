@@ -1,35 +1,35 @@
-# 基于 HDFS-HA-QJM 部署 hive
+# 基于 HDFS-HA-QJM 部署 HBase
 
 HDFS-HA-QJM 的部署安装请参考 hdfs-ha-qjm 分支
 
+[参考文档](https://hbase.apache.org/book.html#fully_dist)
+
 ## 环境
 
-[apache-hive-3.1.3-bin.tar.gz](https://dlcdn.apache.org/hive/hive-3.1.3/apache-hive-3.1.3-bin.tar.gz)
+[hbase-2.5.0-bin.tar.gz](https://dlcdn.apache.org/hbase/2.5.0/hbase-2.5.0-bin.tar.gz)
 
 ## 服务器规划
 
-| 192.168.1.101   | 192.168.1.102   | 192.168.1.103 |
-| --------------- | --------------- | ------------- |
-| NameNode        | NameNode        |               |
-| JournalNode     | JournalNode     | JournalNode   |
-| DataNode        | DataNode        | DataNode      |
-| zookeeper       | zookeeper       | zookeeper     |
-| ZKFC            | ZKFC            |               |
-| ResourceManager | ResourceManager |               |
-| NodeManager     | NodeManager     | NodeManager   |
-|                 |                 | HiveServer2   |
-|                 |                 | MySQL         |
+| 192.168.1.101   | 192.168.1.102     | 192.168.1.103 |
+| --------------- | ----------------- | ------------- |
+| NameNode        | NameNode          |               |
+| JournalNode     | JournalNode       | JournalNode   |
+| DataNode        | DataNode          | DataNode      |
+| zookeeper       | zookeeper         | zookeeper     |
+| ZKFC            | ZKFC              |               |
+| ResourceManager | ResourceManager   |               |
+| NodeManager     | NodeManager       | NodeManager   |
+| HbaseMaster     | HbaseMasterBackup |               |
+| RegionServer    | RegionServer      | RegionServer  |
 
-## 获取 Hive 安装包
+## 获取 Hbase 安装包
 
 ```bash
 su - hadoop
 
-wget https://mirrors.tuna.tsinghua.edu.cn/apache/hive/hive-3.1.3/apache-hive-3.1.3-bin.tar.gz
+wget https://mirrors.tuna.tsinghua.edu.cn/apache/hbase/2.5.0/hbase-2.5.0-bin.tar.gz
 
-tar xaf apache-hive-3.1.3-bin.tar.gz
-
-cd apache-hive-3.1.3-bin
+tar xaf hbase-2.5.0-bin.tar.gz
 ```
 
 ## 配置环境变量
@@ -37,27 +37,82 @@ cd apache-hive-3.1.3-bin
 #### /home/hadoop/.bashrc
 
 ```bash
-export HIVE_HOME="/home/hadoop/apache-hive-3.1.3-bin"
-export PATH=$PATH:$HIVE_HOME/bin
+export HBASE_HOME="/home/hadoop/hbase-2.5.0"
+export PATH=$PATH:$HBASE_HOME/bin
 ```
 
 `source ~/.bashrc`
 
-#### $HADOOP_HOME/etc/hadoop/core-site.xml
+#### $HBASE_HOME/conf/hbase-env.sh
 
-新增如下配置，参考文档
+```bash
+#!/usr/bin/env bash
+export JAVA_HOME=/usr/lib/jvm/java-1.8.0
+export HBASE_MANAGES_ZK=false
+```
 
-> https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-common/Superusers.html
+#### $HBASE_HOME/conf/hbase-site.xml
 
 ```xml
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
     <property>
-        <name>hadoop.proxyuser.hadoop.hosts</name>
-        <value>192.168.1.0/24</value>
+        <name>hbase.rootdir</name>
+        <value>hdfs://hadoop001:8020/hbase</value>
     </property>
     <property>
-        <name>hadoop.proxyuser.hadoop.groups</name>
-        <value>*</value>
+        <name>hbase.cluster.distributed</name>
+        <value>true</value>
     </property>
+    <property>
+        <name>hbase.zookeeper.quorum</name>
+        <value>hadoop001,hadoop002,hadoop003</value>
+    </property>
+    <property>
+        <name>hbase.zookeeper.property.dataDir</name>
+        <value>/var/lib/zookeeper</value>
+    </property>
+    <property>
+        <name>hbase.wal.provider</name>
+        <value>filesystem</value>
+    </property>
+</configuration>
+```
+
+#### $HBASE_HOME/conf/regionservers
+
+regionservers
+
+```
+hadoop001
+hadoop002
+hadoop003
+```
+
+#### $HBASE_HOME/conf/backup-masters
+
+备节点
+
+```
+hadoop002
+```
+
+#### $HADOOP_HOME/etc/hadoop/hdfs-site.xml
+
+新增如下配置
+
+```xml
+<property>
+  <name>dfs.datanode.max.transfer.threads</name>
+  <value>4096</value>
+</property>
+```
+
+## 分发程序包
+
+```bash
+scp -r ~/hbase-2.5.0 hadoop002:~
 ```
 
 ## 启动 hdfs
@@ -65,290 +120,53 @@ export PATH=$PATH:$HIVE_HOME/bin
 ```bash
 # 分别在三台主机执行
 ~/apache-zookeeper-3.7.1-bin/bin/zkServer.sh start
-# 在 namenode 节点执行；执行后检查一下，发现有未启动的情况。
+# 在 namenode 节点执行；
 start-all.sh
 ```
 
-## 创建 hive 所需目录
+## 启动 hbase
+
+在 hadoop001 执行
 
 ```bash
-hadoop fs -mkdir /tmp
-hadoop fs -chmod g+w /tmp
-hadoop fs -mkdir -p /user/hive/warehouse
-hadoop fs -chmod g+w /user/hive/warehouse
+start-hbase.sh
 ```
 
-
-
----
-
-
-
-## 内嵌模式
-
-> https://cwiki.apache.org/confluence/display/Hive/AdminManual+Metastore+3.0+Administration
-
-在此配置中，只有一个客户端可以使用 Metastore，并且任何更改在客户端生命周期后都不会持久
-
-#### $HIVE_HOME/conf/hive-site.xml
-
-新建此文件
-
-```xml
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
-<configuration>
-  <property>
-    <name>hive.metastore.db.type</name>
-    <value>DERBY</value>
-    <description>
-      Expects one of [derby, oracle, mysql, mssql, postgres].
-      Type of database used by the metastore. Information schema & JDBCStorageHandler depend on it.
-    </description>
-  </property>
-  <property>
-    <name>hive.metastore.warehouse.dir</name>
-    <value>/user/hive/warehouse</value>
-    <description>location of default database for the warehouse</description>
-  </property>
-  <property>
-    <name>hive.metastore.uris</name>
-    <value/>
-    <description>Thrift URI for the remote metastore. Used by metastore client to connect to remote metastore.</description>
-  </property>
-  <property>
-    <name>javax.jdo.option.ConnectionURL</name>
-    <value>jdbc:derby:;databaseName=metastore_db;create=true</value>
-    <description>
-      JDBC connect string for a JDBC metastore.
-      To use SSL to encrypt/authenticate the connection, provide database-specific SSL flag in the connection URL. 
-      For example, jdbc:postgresql://myhost/db?ssl=true for postgres database.
-    </description>
-  </property>
-  <property>
-    <name>javax.jdo.option.ConnectionDriverName</name>
-    <value>org.apache.derby.jdbc.EmbeddedDriver</value>
-    <description>Driver class name for a JDBC metastore</description>
-  </property>
-  <property>
-    <name>hive.metastore.schema.verification</name>
-    <value>false</value>
-    <description>
-      Enforce metastore schema version consistency.
-      True: Verify that version information stored in is compatible with one from Hive jars.  Also disable automatic
-            schema migration attempt. Users are required to manually migrate schema after Hive upgrade which ensures
-            proper metastore schema migration. (Default)
-      False: Warn if the version information stored in metastore doesn't match with one from in Hive jars.
-    </description>
-  </property>
-  <property>
-    <name>hive.server2.enable.doAs</name>
-    <value>false</value>
-  </property>
-</configuration>
-```
-
-### 初始化 Derby 数据库
+单个组件启动
 
 ```bash
-schematool -initSchema -dbType derby
+hbase-daemon.sh start master
 ```
 
-执行成功提示信息
-
-> Initialization script completed
-> schemaTool completed
-
-生成的数据文件在 `$HIVE_HOME/metastore_db`
-
-### 连接 hive 数据库
-
-#### 通过 hive 命令
+## 操作测试
 
 ```bash
-hive
+hbase shell
+
+version
+
+status
+
+create 'test', 'cf'
+
+list 'test'
+
+describe 'test'
+
+put 'test', 'row1', 'cf:a', 'value1'
+put 'test', 'row2', 'cf:b', 'value2'
+put 'test', 'row3', 'cf:c', 'value3'
+
+scan 'test'
+
+get 'test', 'row1'
+
+disable 'test'
+drop 'test'
+
+quit
 ```
 
-#### 通过 hiveserver 服务
+## 网页访问
 
-启动 hiveserver2
-
-```bash
-hiveserver2
-```
-
-测试连接
-
-```bash
-beeline -n hadoop -u jdbc:hive2://localhost:10000
-
-# 退出 beeline
-jdbc:hive2://localhost:10000> !q
-```
-
-### 测试 SQL 语句
-
-```sql
-create table test(id string);
-
-insert into test values('1');
-
-select * from test;
-```
-
-
-
----
-
-## MySQL
-
-数据库版本： 5.7
-
-### 安装数据库
-
-```bash
-yum localinstall https://dev.mysql.com/get/mysql57-community-release-el7-11.noarch.rpm
-
-rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2022
-
-yum install mysql-community-server 
-
-systemctl enable mysqld --now
-
-grep 'A temporary password' /var/log/mysqld.log | tail -1
-
-/usr/bin/mysql_secure_installation
-
-mysql -u root -p
-```
-
-### 创建 hive 账号和库
-
-```sql
-create user 'hive'@'192.168.1.%' IDENTIFIED BY 'Hive_1234';
-create database hive;
-
-GRANT ALL ON hive.* TO 'hive'@'192.168.1.%';
-
-FLUSH PRIVILEGES;
-
--- mysql -u hive -p -h 192.168.1.103
-```
-
-### 配置数据库驱动
-
-```bash
-yum install mysql-connector-java
-cp /usr/share/java/mysql-connector-java.jar $HIVE_HOME/lib/mysql-connector-java.jar
-chown hadoop.hadoop $HIVE_HOME/lib/mysql-connector-java.jar
-```
-
-### $HIVE_HOME/conf/hive-site.xml
-
-```xml
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
-<configuration>
-  <property>
-    <name>hive.metastore.db.type</name>
-    <value>mysql</value>
-    <description>
-      Expects one of [derby, oracle, mysql, mssql, postgres].
-      Type of database used by the metastore. Information schema & JDBCStorageHandler depend on it.
-    </description>
-  </property>
-  <property>
-    <name>hive.metastore.warehouse.dir</name>
-    <value>/user/hive/warehouse</value>
-    <description>location of default database for the warehouse</description>
-  </property>
-  <property>
-    <name>hive.metastore.uris</name>
-    <value>thrift://127.0.0.1:9083</value>
-    <description>Thrift URI for the remote metastore. Used by metastore client to connect to remote metastore.</description>
-  </property>
-  <property>
-    <name>javax.jdo.option.ConnectionURL</name>
-    <value>jdbc:mysql://192.168.1.103/hive?serverTimezone=Asia/Shanghai</value>
-    <description>
-      JDBC connect string for a JDBC metastore.
-      To use SSL to encrypt/authenticate the connection, provide database-specific SSL flag in the connection URL.
-      For example, jdbc:postgresql://myhost/db?ssl=true for postgres database.
-    </description>
-  </property>
-  <property>
-    <name>javax.jdo.option.ConnectionUserName</name>
-    <value>hive</value>
-    <description>Username to use against metastore database</description>
-  </property>
-  <property>
-    <name>javax.jdo.option.ConnectionPassword</name>
-    <value>Hive_1234</value>
-    <description>password to use against metastore database</description>
-  </property>
-  <property>
-    <name>javax.jdo.option.ConnectionDriverName</name>
-    <value>com.mysql.cj.jdbc.Driver</value>
-    <description>Driver class name for a JDBC metastore</description>
-  </property>
-  <property>
-    <name>hive.metastore.event.db.notification.api.auth</name>
-    <value>false</value>
-    <description>
-      Should metastore do authorization against database notification related APIs such as get_next_notification.
-      If set to true, then only the superusers in proxy settings have the permission
-    </description>
-  </property>
-  <property>
-    <name>hive.metastore.schema.verification</name>
-    <value>false</value>
-    <description>
-      Enforce metastore schema version consistency.
-      True: Verify that version information stored in is compatible with one from Hive jars.  Also disable automatic
-            schema migration attempt. Users are required to manually migrate schema after Hive upgrade which ensures
-            proper metastore schema migration. (Default)
-      False: Warn if the version information stored in metastore doesn't match with one from in Hive jars.
-    </description>
-  </property>
-  <property>
-    <name>hive.server2.enable.doAs</name>
-    <value>false</value>
-  </property>
-</configuration>
-```
-
-### 初始化 MySQL 数据库
-
-```bash
-schematool -dbType mysql -initSchema
-```
-
-执行成功提示信息
-
-> Initialization script completed
-> schemaTool completed
-
-### 启动 hive 服务
-
-```bash
-hive --service metastore &
-hive --service hiveserver2 &
-```
-
-页面访问
-
-http://192.168.1.103:10002/
-
-测试连接
-
-`beeline -n hadoop -u jdbc:hive2://localhost:10000`
-
-### 测试 SQL 语句
-
-```sql
-create table test(id string);
-
-insert into test values('1');
-
-select * from test;
-```
+http://hadoop001:16010
