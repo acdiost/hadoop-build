@@ -2,17 +2,17 @@ hosts = [
   {
     :name => "hadoop001",
     :box => "generic/centos7",
-    :ip => "192.168.31.101"
+    :ip => "192.168.1.101"
   },
   {
     :name => "hadoop002",
     :box => "generic/centos7",
-    :ip => "192.168.31.102"
+    :ip => "192.168.1.102"
   },
   {
     :name => "hadoop003",
     :box => "generic/centos7",
-    :ip => "192.168.31.103"
+    :ip => "192.168.1.103"
   }
   ]
 
@@ -31,8 +31,8 @@ Vagrant.configure("2") do |config|
       host.vm.hostname = item[:name]
       host.vm.network :public_network, ip: item[:ip]
       host.vm.provider "virtualbox" do |v|
-        v.memory = 4096
-        v.cpus = 2
+        v.memory = 8192
+        v.cpus = 4
         # v.gui = true
       end
     end
